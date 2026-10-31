@@ -1,0 +1,14 @@
+{
+  "name": "galeria-fotos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Galería web de fotos autoalojada con usuarios, carpetas compartidas y permisos",
+  "scripts": {
+    "install:all": "npm --prefix server ci && npm --prefix web ci",
+    "build": "npm --prefix web run build && npm --prefix server run build",
+    "start": "node server/dist/index.js",
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix web run dev"
+  },
+  "engines": { "node": ">=20" }
+}

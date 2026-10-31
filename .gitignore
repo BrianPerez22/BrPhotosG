@@ -1,0 +1,18 @@
+# Configuración y secretos (NUNCA subir)
+.env
+.env.*
+!.env.example
+
+# Datos generados en el servidor (usuarios, miniaturas)
+data/
+
+# Dependencias y compilados
+node_modules/
+server/dist/
+web/dist/
+
+# Varios
+*.log
+*.zip
+.DS_Store
+config-privada/
