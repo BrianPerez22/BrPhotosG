@@ -11,10 +11,12 @@ import {
 } from './fsutil';
 import { config } from './config';
 import { getThumb, type SizeKey } from './thumbs';
+import { transferRoutes } from './routes-transfer';
 import { getCaptureDate, syncFileMtime } from './metadata';
 
 export const fileRoutes = Router();
 fileRoutes.use(requireAuth);
+fileRoutes.use(transferRoutes);
 
 const collator = new Intl.Collator('es', { numeric: true, sensitivity: 'base' });
 

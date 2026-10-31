@@ -10,13 +10,15 @@ interface Props {
   onClose: () => void;
   canDownload: boolean;
   canDelete: boolean;
+  canTransfer: boolean;
   onDelete: (f: FileEntry) => void;
+  onTransfer: (f: FileEntry) => void;
 }
 
 const src = (f: FileEntry) => (f.type === 'video' || isGif(f) ? fileUrl(f.path) : thumbUrl(f.path, 'lg'));
 const STRIP = 20; // miniaturas visibles a cada lado en la tira inferior
 
-export default function Lightbox({ items, index, setIndex, onClose, canDownload, canDelete, onDelete }: Props) {
+export default function Lightbox({ items, index, setIndex, onClose, canDownload, canDelete, canTransfer, onDelete, onTransfer }: Props) {
   const f = items[index];
   const touch = useRef<number | null>(null);
   const [showInfo, setShowInfo] = useState(false);
@@ -119,6 +121,11 @@ export default function Lightbox({ items, index, setIndex, onClose, canDownload,
             <a className={tb} href={fileUrl(f.path, true)} aria-label="Descargar archivo" title="Descargar original">
               <Icon name="download" className="h-5 w-5" />
             </a>
+          )}
+          {canTransfer && (
+            <button className={tb} onClick={() => onTransfer(f)} aria-label="Mover o copiar" title="Mover o copiar a otra carpeta">
+              <Icon name="move" className="h-5 w-5" />
+            </button>
           )}
           {canDelete && (
             <button className={`${tb} !bg-rose-600/30 !text-rose-200 hover:!bg-rose-600/50`} onClick={() => onDelete(f)} aria-label="Eliminar foto" title="Eliminar">

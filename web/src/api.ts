@@ -30,6 +30,8 @@ export const api = {
   updateUser: (id: string, u: UserInput) => req<Me>('/api/admin/users/' + id, { method: 'PATCH', body: JSON.stringify(u) }),
   deleteUser: (id: string) => req<void>('/api/admin/users/' + id, { method: 'DELETE' }),
   allFolders: () => req<string[]>('/api/admin/folders'),
+  transfer: (paths: string[], dest: string, mode: 'move' | 'copy') =>
+    req<{ done: number; skipped: number }>('/api/transfer', post({ paths, dest, mode })),
 };
 
 export const thumbUrl = (path: string, size: 'xs' | 'sm' | 'lg' = 'sm') => `/api/thumb?s=${size}&path=${encodeURIComponent(path)}`;

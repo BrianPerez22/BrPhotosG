@@ -48,7 +48,7 @@ body { @apply bg-bg text-fg antialiased; }
     @apply h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm text-fg outline-none focus:border-accent;
   }
   .card { @apply rounded-xl border border-line bg-surface; }
-  .modal-back { @apply fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4; }
+  .modal-back { @apply fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4; }
   .modal { @apply w-full rounded-xl border border-line bg-bg p-5; }
   .label { @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-muted; }
 }

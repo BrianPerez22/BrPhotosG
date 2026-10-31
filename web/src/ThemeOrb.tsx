@@ -1,18 +1,15 @@
-import { toggleTheme, useMode } from './theme';
-import { Icon } from './icons';
+import { nextTheme, useTheme } from './theme';
 
-/** La bolita: un solo clic alterna entre modo claro y oscuro. Nada más. */
+/** La bolita: un clic cambia al siguiente tema de color (todos planos). */
 export default function ThemeOrb() {
-  const mode = useMode();
+  const t = useTheme();
   return (
     <button
       type="button"
-      onClick={toggleTheme}
-      aria-label={mode === 'dark' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
-      title={mode === 'dark' ? 'Modo claro' : 'Modo oscuro'}
-      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white"
-    >
-      <Icon name={mode === 'dark' ? 'sun' : 'moon'} className="h-4 w-4" />
-    </button>
+      onClick={nextTheme}
+      aria-label={`Tema ${t.name}. Clic para cambiar de color`}
+      title={`Tema: ${t.name} — clic para cambiar`}
+      className="h-9 w-9 shrink-0 rounded-full border-2 border-fg/25 bg-accent"
+    />
   );
 }

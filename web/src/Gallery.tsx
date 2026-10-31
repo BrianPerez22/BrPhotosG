@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, fileUrl, fmtSize, thumbUrl, uploadFiles } from './api';
 import { Icon } from './icons';
 import Lightbox from './Lightbox';
+import TransferDialog from './TransferDialog';
 import ThemeOrb from './ThemeOrb';
 import type { FileEntry, FolderEntry, Listing, Me } from './types';
 
@@ -188,6 +189,7 @@ export default function Gallery({ me, path, go, onTreeChange, openMenu }: Props)
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<{ paths: string[]; label: string } | null>(null);
+  const [transfer, setTransfer] = useState<{ paths: string[]; label: string; folders: string[] } | null>(null);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -446,6 +448,16 @@ export default function Gallery({ me, path, go, onTreeChange, openMenu }: Props)
               </button>
             </div>
             <div className="flex items-center gap-1">
+              {me.perms.upload && (
+                <button
+                  className="btn-flat px-2.5"
+                  disabled={!sel.size}
+                  onClick={() => setTransfer({ paths: [...sel], label: `${sel.size} elemento(s)`, folders: [] })}
+                >
+                  <Icon name="move" className="h-4 w-4" />
+                  <span className="hidden sm:inline">Mover / Copiar</span>
+                </button>
+              )}
               {me.perms.download && (
                 <button className="btn-flat px-2.5" onClick={downloadSelected} disabled={!sel.size}>
                   <Icon name="download" className="h-4 w-4" />
@@ -683,13 +695,22 @@ export default function Gallery({ me, path, go, onTreeChange, openMenu }: Props)
                         </div>
                       </button>
                       {isAdmin && (
-                        <button
-                          onClick={() => setDeleteConfirm({ paths: [f.path], label: `la carpeta «${f.name}» con todo su contenido` })}
-                          aria-label={`Eliminar carpeta ${f.name}`}
-                          className="absolute right-1.5 top-1.5 flex rounded-full bg-black/70 p-1.5 text-white hover:bg-rose-600 md:hidden md:group-hover:flex"
-                        >
-                          <Icon name="trash" className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="absolute right-1.5 top-1.5 flex gap-1 md:hidden md:group-hover:flex">
+                          <button
+                            onClick={() => setTransfer({ paths: [f.path], label: `la carpeta «${f.name}»`, folders: [f.path] })}
+                            aria-label={`Mover o copiar carpeta ${f.name}`}
+                            className="rounded-full bg-black/70 p-1.5 text-white hover:bg-accent"
+                          >
+                            <Icon name="move" className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirm({ paths: [f.path], label: `la carpeta «${f.name}» con todo su contenido` })}
+                            aria-label={`Eliminar carpeta ${f.name}`}
+                            className="rounded-full bg-black/70 p-1.5 text-white hover:bg-rose-600"
+                          >
+                            <Icon name="trash" className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       )}
                     </div>
                   ))}
@@ -883,6 +904,25 @@ export default function Gallery({ me, path, go, onTreeChange, openMenu }: Props)
         </div>
       )}
 
+      {transfer && (
+        <TransferDialog
+          me={me}
+          startPath={data?.path ?? ''}
+          paths={transfer.paths}
+          label={transfer.label}
+          folders={transfer.folders}
+          onClose={() => setTransfer(null)}
+          onDone={async (msg) => {
+            setTransfer(null);
+            endSelection();
+            setOpen(null);
+            flash(msg);
+            await load();
+            onTreeChange();
+          }}
+        />
+      )}
+
       {open !== null && files[open] && (
         <Lightbox
           items={files}
@@ -891,6 +931,8 @@ export default function Gallery({ me, path, go, onTreeChange, openMenu }: Props)
           onClose={() => setOpen(null)}
           canDownload={me.perms.download}
           canDelete={me.perms.delete}
+          canTransfer={me.perms.upload}
+          onTransfer={(f) => setTransfer({ paths: [f.path], label: `«${f.name}»`, folders: [] })}
           onDelete={(f) => setDeleteConfirm({ paths: [f.path], label: `«${f.name}»` })}
         />
       )}
