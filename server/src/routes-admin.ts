@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { publicUser, requireAdmin, requireAuth } from './auth';
-import { HttpError, normalizeRel, REAL_ROOT, resolveSafe } from './fsutil';
+import { HttpError, LIBRARIES, normalizeLibRel, resolveSafe, splitLibRel, joinLibRel } from './fsutil';
 import { addUser, findById, findByName, listUsers, newId, removeUser, saveUsers, type Perms, type User } from './store';
 
 export const adminRoutes = Router();
@@ -15,18 +15,27 @@ function cleanPerms(p: any, fallback: Perms): Perms {
   const b = (k: keyof Perms) => (typeof p?.[k] === 'boolean' ? p[k] : fallback[k]);
   return { view: b('view'), download: b('download'), upload: b('upload'), delete: b('delete') };
 }
+
+/**
+ * Valida y limpia un array de rutas "LibName:rel" proporcionadas por el admin.
+ * Verifica que cada una exista y sea directorio.
+ */
 async function cleanFolders(list: unknown): Promise<string[]> {
   if (!Array.isArray(list)) throw new HttpError(400, 'Carpetas inválidas');
   const out = new Set<string>();
   for (const f of list) {
-    const rel = normalizeRel(f);
-    if (!rel) continue;
-    const abs = await resolveSafe(rel);
-    if (!(await fs.stat(abs)).isDirectory()) throw new HttpError(400, `No es una carpeta: ${rel}`);
-    out.add(rel);
+    const libRelPath = normalizeLibRel(f);
+    if (!libRelPath) continue;
+    const { libName, rel } = splitLibRel(libRelPath);
+    if (!LIBRARIES[libName]) throw new HttpError(400, `Biblioteca desconocida: ${libName}`);
+    if (!rel) throw new HttpError(400, `Debes especificar una subcarpeta dentro de «${libName}», no la raíz`);
+    const abs = await resolveSafe(libRelPath);
+    if (!(await fs.stat(abs)).isDirectory()) throw new HttpError(400, `No es una carpeta: ${libRelPath}`);
+    out.add(libRelPath);
   }
   return [...out];
 }
+
 const adminCount = () => listUsers().filter((u) => u.role === 'admin').length;
 
 adminRoutes.get('/users', (_req, res) => { res.json(listUsers().map(publicUser)); });
@@ -85,16 +94,29 @@ adminRoutes.delete('/users/:id', (req, res) => {
   res.status(204).end();
 });
 
-// Lista plana de carpetas (hasta 4 niveles) para el selector
+// ---------------------------------------------------------------------------
+// Lista plana de carpetas de TODAS las bibliotecas (hasta 4 niveles)
+// para el selector de carpetas del panel de administración
+// ---------------------------------------------------------------------------
 adminRoutes.get('/folders', async (_req, res) => {
   const out: string[] = [];
-  async function walk(rel: string, depth: number) {
+  async function walk(libName: string, rel: string, depth: number) {
     if (depth > 4 || out.length > 3000) return;
-    const abs = path.join(REAL_ROOT, ...rel.split('/').filter(Boolean));
+    const abs = path.join(LIBRARIES[libName], ...rel.split('/').filter(Boolean));
     const entries = await fs.readdir(abs, { withFileTypes: true }).catch(() => []);
-    const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name).sort((a, b) => a.localeCompare(b, 'es', { numeric: true }));
-    for (const d of dirs) { const r = rel ? `${rel}/${d}` : d; out.push(r); await walk(r, depth + 1); }
+    const dirs = entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b, 'es', { numeric: true }));
+    for (const d of dirs) {
+      const childRel = rel ? `${rel}/${d}` : d;
+      const libRelPath = joinLibRel(libName, childRel);
+      out.push(libRelPath);
+      await walk(libName, childRel, depth + 1);
+    }
   }
-  await walk('', 1);
+  for (const libName of Object.keys(LIBRARIES)) {
+    await walk(libName, '', 1);
+  }
   res.json(out);
 });

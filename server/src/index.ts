@@ -63,5 +63,6 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
 });
 
 app.listen(config.port, config.host, () => {
-  console.log(`Galería escuchando en http://${config.host}:${config.port}  ·  fotos: ${config.photosRoot}`);
+  const libs = Object.entries(config.libraries).map(([n, p]) => `  • ${n}: ${p}`).join('\n');
+  console.log(`Galería escuchando en http://${config.host}:${config.port}\nBibliotecas:\n${libs}`);
 });

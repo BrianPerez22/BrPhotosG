@@ -4,17 +4,33 @@ import { Icon } from './icons';
 import type { Me, Perms } from './types';
 
 const PERM_LABELS: [keyof Perms, string][] = [['view', 'Ver'], ['download', 'Descargar'], ['upload', 'Subir'], ['delete', 'Eliminar']];
-const depth = (p: string) => p.split('/').length - 1;
+
+/** Extrae la profundidad de indentación: "Fotos:a/b/c" → 2 (solo la parte rel) */
+function depth(p: string): number {
+  const rel = p.includes(':') ? p.slice(p.indexOf(':') + 1) : p;
+  return rel ? rel.split('/').length : 0;
+}
+
+/** Nombre de display para una ruta "LibName:rel/path" */
+function folderLabel(f: string, filter: boolean): string {
+  if (filter) return f; // al buscar, muestra la ruta completa
+  if (f.includes(':')) {
+    const [lib, rel] = f.split(':');
+    if (!rel) return lib; // raíz de biblioteca
+    return rel.split('/').pop() ?? f;
+  }
+  return f.split('/').pop() ?? f;
+}
 
 function UserForm({ user, folders, onClose, onSaved }: { user: Me | null; folders: string[]; onClose: () => void; onSaved: () => void }) {
   const [username, setUsername] = useState(user?.username ?? '');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<'admin' | 'user'>(user?.role ?? 'user');
-  const [perms, setPerms] = useState<Perms>(user?.perms ?? { view: true, download: true, upload: false, delete: false });
-  const [chosen, setChosen] = useState<Set<string>>(new Set(user?.folders ?? []));
-  const [filter, setFilter] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [role, setRole]         = useState<'admin' | 'user'>(user?.role ?? 'user');
+  const [perms, setPerms]       = useState<Perms>(user?.perms ?? { view: true, download: true, upload: false, delete: false });
+  const [chosen, setChosen]     = useState<Set<string>>(new Set(user?.folders ?? []));
+  const [filter, setFilter]     = useState('');
+  const [error, setError]       = useState('');
+  const [busy, setBusy]         = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault(); setBusy(true); setError('');
@@ -51,13 +67,14 @@ function UserForm({ user, folders, onClose, onSaved }: { user: Me | null; folder
               </div>
             </fieldset>
             <fieldset><legend className="mb-1 text-sm font-medium">Carpetas visibles <span className="font-normal text-ink-500">({chosen.size}) · incluyen sus subcarpetas</span></legend>
-              <input className="input mb-2" placeholder="Buscar carpeta…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+              <input className="input mb-2" placeholder="Buscar carpeta… (ej: Fotos:2024)" value={filter} onChange={(e) => setFilter(e.target.value)} />
               <div className="max-h-48 overflow-y-auto rounded-lg border border-ink-200 p-1 dark:border-ink-700">
                 {shown.length === 0 && <p className="p-2 text-sm text-ink-500">No hay carpetas.</p>}
                 {shown.map((f) => (
-                  <label key={f} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-ink-100 dark:hover:bg-ink-800" style={{ paddingLeft: `${8 + (filter ? 0 : depth(f)) * 16}px` }}>
+                  <label key={f} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-ink-100 dark:hover:bg-ink-800"
+                    style={{ paddingLeft: `${8 + (filter ? 0 : depth(f)) * 16}px` }}>
                     <input type="checkbox" className="accent-accent" checked={chosen.has(f)} onChange={(e) => setChosen((s) => { const n = new Set(s); e.target.checked ? n.add(f) : n.delete(f); return n; })} />
-                    <Icon name="folder" className="h-4 w-4 text-ink-400" /><span className="truncate">{filter ? f : f.split('/').pop()}</span>
+                    <Icon name="folder" className="h-4 w-4 text-ink-400" /><span className="truncate">{folderLabel(f, !!filter)}</span>
                   </label>
                 ))}
               </div>
@@ -75,12 +92,12 @@ function UserForm({ user, folders, onClose, onSaved }: { user: Me | null; folder
 }
 
 export default function Admin({ me, onTreeChange }: { me: Me; onTreeChange: () => void }) {
-  const [users, setUsers] = useState<Me[]>([]);
+  const [users, setUsers]   = useState<Me[]>([]);
   const [folders, setFolders] = useState<string[]>([]);
-  const [edit, setEdit] = useState<Me | 'new' | null>(null);
-  const [msg, setMsg] = useState('');
+  const [edit, setEdit]     = useState<Me | 'new' | null>(null);
+  const [msg, setMsg]       = useState('');
   const [parent, setParent] = useState('');
-  const [name, setName] = useState('');
+  const [name, setName]     = useState('');
 
   const load = () => Promise.all([api.users(), api.allFolders()]).then(([u, f]) => { setUsers(u); setFolders(f); }).catch((e) => setMsg(e.message));
   useEffect(() => { load(); }, []);
@@ -89,10 +106,21 @@ export default function Admin({ me, onTreeChange }: { me: Me; onTreeChange: () =
     if (!confirm(`¿Eliminar al usuario «${u.username}»? Sus fotos no se borran.`)) return;
     try { await api.deleteUser(u.id); load(); } catch (e) { setMsg((e as Error).message); }
   }
+
   async function mkdir(e: FormEvent) {
     e.preventDefault();
-    try { const r = await api.mkdir(parent, name.trim()); setMsg(`Carpeta creada: ${r.path}`); setName(''); load(); onTreeChange(); }
-    catch (err) { setMsg((err as Error).message); }
+    try {
+      const r = await api.mkdir(parent, name.trim());
+      setMsg(`Carpeta creada: ${r.path}`); setName(''); load(); onTreeChange();
+    } catch (err) { setMsg((err as Error).message); }
+  }
+
+  // Agrupa las carpetas por biblioteca para el selector de "Crear carpeta"
+  const foldersByLib: Record<string, string[]> = {};
+  for (const f of folders) {
+    const lib = f.includes(':') ? f.split(':')[0] : '(sin biblioteca)';
+    if (!foldersByLib[lib]) foldersByLib[lib] = [];
+    foldersByLib[lib].push(f);
   }
 
   return (
@@ -123,8 +151,16 @@ export default function Admin({ me, onTreeChange }: { me: Me; onTreeChange: () =
         <h3 className="mb-2 text-sm font-medium text-ink-500">Crear carpeta</h3>
         <form onSubmit={mkdir} className="flex flex-wrap gap-2">
           <select className="input w-auto min-w-40 flex-1" value={parent} onChange={(e) => setParent(e.target.value)} aria-label="Dentro de">
-            <option value="">Fotos (raíz)</option>
-            {folders.map((f) => <option key={f} value={f}>{'\u2003'.repeat(depth(f))}{f.split('/').pop()}</option>)}
+            <option value="">— Selecciona una carpeta padre —</option>
+            {Object.entries(foldersByLib).map(([lib, flds]) => (
+              <optgroup key={lib} label={lib}>
+                {flds.map((f) => {
+                  const rel = f.includes(':') ? f.slice(f.indexOf(':') + 1) : f;
+                  const indent = '\u2003'.repeat(rel ? rel.split('/').length - 1 : 0);
+                  return <option key={f} value={f}>{indent}{f.split('/').pop() ?? f}</option>;
+                })}
+              </optgroup>
+            ))}
           </select>
           <input className="input w-auto min-w-40 flex-1" placeholder="Nombre de la carpeta" value={name} onChange={(e) => setName(e.target.value)} required />
           <button className="btn-solid h-10">Crear</button>
