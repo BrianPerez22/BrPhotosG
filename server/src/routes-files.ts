@@ -11,42 +11,12 @@ import {
 } from './fsutil';
 import { config } from './config';
 import { getThumb, type SizeKey } from './thumbs';
+import { getCaptureDate, syncFileMtime } from './metadata';
 
 export const fileRoutes = Router();
 fileRoutes.use(requireAuth);
 
 const collator = new Intl.Collator('es', { numeric: true, sensitivity: 'base' });
-
-// ---------------------------------------------------------------------------
-// Fecha real de captura (EXIF DateTimeOriginal) con fallback a mtime
-// ---------------------------------------------------------------------------
-async function captureDate(abs: string, mtime: number): Promise<number> {
-  try {
-    const meta = await sharp(abs, { failOn: 'none' }).metadata();
-    const raw = (meta as any).exif ? undefined : undefined; // sharp no expone EXIF parsed
-    // Usamos el campo 'iso' como proxy: si sharp puede leer metadatos, intentamos exif
-    // sharp provee `meta.exif` como Buffer; parseamos manualmente DateTimeOriginal
-    if (meta.exif) {
-      const exifBuf = meta.exif as Buffer;
-      const str = exifBuf.toString('binary');
-      // Busca "DateTimeOriginal\0" seguido de la fecha "YYYY:MM:DD HH:MM:SS"
-      const match = str.match(/DateTimeOriginal\0{0,4}([\x20-\x7e]{19})/);
-      if (match) {
-        const parsed = match[1].replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
-        const d = new Date(parsed);
-        if (!isNaN(d.getTime())) return d.getTime();
-      }
-      // Fallback: busca DateTimeDigitized
-      const match2 = str.match(/DateTimeDigitized\0{0,4}([\x20-\x7e]{19})/);
-      if (match2) {
-        const parsed2 = match2[1].replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
-        const d2 = new Date(parsed2);
-        if (!isNaN(d2.getTime())) return d2.getTime();
-      }
-    }
-  } catch { /* sin metadatos: usa mtime */ }
-  return mtime;
-}
 
 // ---------------------------------------------------------------------------
 // Entrada de carpeta
@@ -158,15 +128,11 @@ fileRoutes.get('/browse', need('view'), async (req, res) => {
   const media = entries.filter((e) => e.isFile() && !e.name.startsWith('.') && mediaType(e.name));
   const files = await Promise.all(media.map(async (e) => {
     const filePath = joinLibRel(libName, rel ? `${rel}/${e.name}` : e.name);
-    const s        = await fs.stat(path.join(abs, e.name));
+    const fileAbs  = path.join(abs, e.name);
+    const s        = await fs.stat(fileAbs);
     const mtime    = s.mtimeMs;
-    // Fecha de captura real (EXIF) para imágenes
     const fileType = mediaType(e.name)!;
-    let cdate = mtime;
-    if (fileType === 'image') {
-      const fileAbs = path.join(abs, e.name);
-      cdate = await captureDate(fileAbs, mtime);
-    }
+    const cdate    = await getCaptureDate(fileAbs, mtime, fileType === 'image');
     return { name: e.name, path: filePath, type: fileType, size: s.size, mtime, cdate };
   }));
   // Ordenar por fecha de captura descendente por defecto en el servidor
@@ -295,12 +261,30 @@ async function dynamicUpload(req: Request, res: Response, next: NextFunction) {
 fileRoutes.post('/upload', need('upload'), prepUpload, dynamicUpload, async (req, res) => {
   const dir  = res.locals.dir as string;
   const list = (req.files ?? []) as Express.Multer.File[];
+  const rawMtimes = req.body?.mtimes;
+  const mtimeList: (number | undefined)[] = Array.isArray(rawMtimes)
+    ? rawMtimes.map((v: any) => (Number(v) && !isNaN(Number(v)) ? Number(v) : undefined))
+    : rawMtimes && !isNaN(Number(rawMtimes)) ? [Number(rawMtimes)] : [];
+
   let uploaded = 0;
-  for (const f of list) {
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i];
     try {
       let name = fixName(f.originalname).replace(/[\/\\\0]/g, '_').replace(/^\.+/, '') || 'archivo';
       name = await uniqueName(dir, name);
-      await fs.rename(f.path, path.join(dir, name));
+      const dest = path.join(dir, name);
+      await fs.rename(f.path, dest);
+
+      // Usar fecha original enviada por el cliente si no hay EXIF, en lugar de la hora de subida
+      const clientMtime = mtimeList[i] ?? (mtimeList.length === 1 ? mtimeList[0] : undefined);
+      const fallback = (clientMtime && clientMtime > 0) ? clientMtime : Date.now();
+      const isImg = mediaType(name) === 'image';
+
+      // Extrae la fecha real de captura de metadatos EXIF / XMP / MP4
+      const cdate = await getCaptureDate(dest, fallback, isImg);
+      // Sincroniza la fecha en el sistema de archivos
+      await syncFileMtime(dest, cdate);
+
       uploaded++;
     } catch { await fs.rm(f.path, { force: true }); }
   }

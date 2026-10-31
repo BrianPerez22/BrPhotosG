@@ -16,12 +16,45 @@ const P: Record<string, string> = {
   photo: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M9 9h.01',
   edit: 'M4 20h4L19 9l-4-4L4 16z',
   key: 'M14 10a4 4 0 1 1-3.5-4M10.5 9.5L3 17v4h4v-2h2v-2h2l1.5-1.5',
+  search: 'M21 21l-4.35-4.35M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0z',
+  palette: 'M12 2C6.49 2 2 6.49 2 12c0 3.31 1.61 5.96 4 7.08v.42c0 1.38 1.12 2.5 2.5 2.5h1.75c1.24 0 2.25-1.01 2.25-2.25 0-.58-.22-1.12-.61-1.52-.39-.41-.64-.96-.64-1.58 0-1.24 1.01-2.25 2.25-2.25H16c3.31 0 6-2.69 6-6 0-4.69-4.26-8.4-10-8.4zM6.5 12a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z',
+  info: 'M12 16v-4m0-4h.01M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z',
+  maximize: 'M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3',
+  minimize: 'M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3',
+  calendar: 'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z',
+  clock: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2',
+  sparkles: 'M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z',
+  slider: 'M4 8h16M4 16h16M8 5v6M16 13v6',
+  eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+  'eye-off': 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22',
+  shield: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
+  chevronDown: 'M6 9l6 6 6-6',
+  chevronRight: 'M9 18l6-6-6-6',
+  camera: 'M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2zM12 9a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
 };
-export function Icon({ name, className = 'h-5 w-5', fill = false }: { name: keyof typeof P | 'play'; className?: string; fill?: boolean }) {
-  if (name === 'play') return <svg viewBox="0 0 24 24" className={className} fill="currentColor"><path d="M8 5v14l11-7z" /></svg>;
+
+export type IconName = keyof typeof P | 'play';
+
+export function Icon({ name, className = 'h-5 w-5', fill = false }: { name: IconName; className?: string; fill?: boolean }) {
+  if (name === 'play') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} fill="currentColor">
+        <path d="M8 5v14l11-7z" />
+      </svg>
+    );
+  }
+  const path = P[name] ?? P.photo;
   return (
-    <svg viewBox="0 0 24 24" className={className} fill={fill ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-      <path d={P[name]} />
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill={fill ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d={path} />
     </svg>
   );
 }

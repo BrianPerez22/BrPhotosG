@@ -48,7 +48,10 @@ export function uploadFiles(path: string, files: File[], onProgress: (loaded: nu
       else reject(new ApiError(xhr.status, body.error ?? (xhr.status === 413 ? 'Archivo demasiado grande' : 'No se pudo subir')));
     };
     const fd = new FormData();
-    files.forEach((f) => fd.append('files', f));
+    files.forEach((f) => {
+      fd.append('files', f);
+      fd.append('mtimes', String(f.lastModified || Date.now()));
+    });
     xhr.send(fd);
   });
 }
