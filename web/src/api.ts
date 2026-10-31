@@ -32,7 +32,7 @@ export const api = {
   allFolders: () => req<string[]>('/api/admin/folders'),
 };
 
-export const thumbUrl = (path: string, size: 'sm' | 'lg' = 'sm') => `/api/thumb?s=${size}&path=${encodeURIComponent(path)}`;
+export const thumbUrl = (path: string, size: 'xs' | 'sm' | 'lg' = 'sm') => `/api/thumb?s=${size}&path=${encodeURIComponent(path)}`;
 export const fileUrl = (path: string, download = false) => `/api/file?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`;
 
 export function uploadFiles(path: string, files: File[], onProgress: (loaded: number) => void) {

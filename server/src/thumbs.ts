@@ -7,7 +7,7 @@ import { config } from './config';
 sharp.cache({ memory: 64, files: 0, items: 50 });
 sharp.concurrency(2);
 
-export const SIZES = { sm: 480, lg: 1800 } as const;
+export const SIZES = { xs: 320, sm: 480, lg: 1800 } as const;
 export type SizeKey = keyof typeof SIZES;
 
 // Máximo 2 miniaturas generándose a la vez (el servidor tiene poca RAM)
@@ -33,7 +33,7 @@ export async function getThumb(abs: string, size: SizeKey): Promise<string> {
       await sharp(abs, { failOn: 'none', limitInputPixels: 268402689 })
         .rotate()
         .resize({ width: SIZES[size], height: SIZES[size], fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: size === 'sm' ? 72 : 82 })
+        .webp({ quality: size === 'lg' ? 82 : 72 })
         .toFile(tmp);
       await fs.rename(tmp, out);
       return out;

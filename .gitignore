@@ -16,3 +16,6 @@ web/dist/
 *.zip
 .DS_Store
 config-privada/
+
+# Copias de seguridad del script de actualización
+.backup-actualizacion-*/
