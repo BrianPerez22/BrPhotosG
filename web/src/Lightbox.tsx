@@ -15,7 +15,34 @@ interface Props {
   onTransfer: (f: FileEntry) => void;
 }
 
-const src = (f: FileEntry) => (f.type === 'video' || isGif(f) ? fileUrl(f.path) : thumbUrl(f.path, 'lg'));
+// En celulares y tablets basta con 1280 px: se descarga y se genera mucho más rápido
+const big = () => (window.innerWidth <= 900 ? 'md' : 'lg');
+const src = (f: FileEntry) => (f.type === 'video' || isGif(f) ? fileUrl(f.path) : thumbUrl(f.path, big()));
+
+/** Muestra al instante la miniatura que ya está en caché y la reemplaza al llegar la foto grande. */
+function FullImage({ f, zoom, onZoom, onReady }: { f: FileEntry; zoom: boolean; onZoom: () => void; onReady: () => void }) {
+  const [loaded, setLoaded] = useState(false);
+  const cls = `max-h-[78vh] max-w-full object-contain ${zoom ? 'scale-150 cursor-zoom-out' : 'cursor-zoom-in'}`;
+  const done = () => {
+    setLoaded(true);
+    onReady();
+  };
+  return (
+    <div className="relative flex items-center justify-center">
+      {!loaded && <img src={thumbUrl(f.path, 'sm')} alt="" className={cls} onClick={onZoom} />}
+      <img
+        src={src(f)}
+        alt={f.name}
+        onClick={onZoom}
+        onLoad={done}
+        onError={done}
+        {...({ fetchpriority: 'high' } as Record<string, string>)}
+        className={loaded ? cls : 'hidden'}
+      />
+      {!loaded && <span className="absolute bottom-2 right-2 rounded bg-black/70 px-2 py-0.5 text-[10px] font-semibold text-white">Cargando…</span>}
+    </div>
+  );
+}
 const STRIP = 20; // miniaturas visibles a cada lado en la tira inferior
 
 export default function Lightbox({ items, index, setIndex, onClose, canDownload, canDelete, canTransfer, onDelete, onTransfer }: Props) {
@@ -56,12 +83,21 @@ export default function Lightbox({ items, index, setIndex, onClose, canDownload,
     return () => window.removeEventListener('keydown', k);
   });
 
-  // Precarga de las fotos vecinas
+  // La foto abierta tiene prioridad: las vecinas se precargan solo cuando ya terminó
+  const [ready, setReady] = useState(false);
   useEffect(() => {
+    setReady(false);
+  }, [index]);
+  useEffect(() => {
+    if (!ready) return;
     for (const n of [items[index + 1], items[index - 1]]) {
-      if (n && n.type === 'image') new Image().src = src(n);
+      if (n && n.type === 'image') {
+        const im = new Image();
+        (im as any).fetchPriority = 'low';
+        im.src = src(n);
+      }
     }
-  }, [index, items]);
+  }, [ready, index, items]);
 
   // Tira de miniaturas con ventana: no se pintan miles de botones
   const start = Math.max(0, index - STRIP);
@@ -146,13 +182,7 @@ export default function Lightbox({ items, index, setIndex, onClose, canDownload,
           {f.type === 'video' ? (
             <video key={f.path} src={fileUrl(f.path)} controls autoPlay playsInline className="max-h-[78vh] max-w-full" />
           ) : (
-            <img
-              key={f.path}
-              src={src(f)}
-              alt={f.name}
-              onClick={() => setZoom(!zoom)}
-              className={`max-h-[78vh] max-w-full object-contain ${zoom ? 'scale-150 cursor-zoom-out' : 'cursor-zoom-in'}`}
-            />
+            <FullImage key={f.path} f={f} zoom={zoom} onZoom={() => setZoom(!zoom)} onReady={() => setReady(true)} />
           )}
         </div>
 

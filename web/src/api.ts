@@ -34,7 +34,7 @@ export const api = {
     req<{ done: number; skipped: number }>('/api/transfer', post({ paths, dest, mode })),
 };
 
-export const thumbUrl = (path: string, size: 'xs' | 'sm' | 'lg' = 'sm') => `/api/thumb?s=${size}&path=${encodeURIComponent(path)}`;
+export const thumbUrl = (path: string, size: 'xs' | 'sm' | 'md' | 'lg' = 'sm') => `/api/thumb?s=${size}&path=${encodeURIComponent(path)}`;
 export const fileUrl = (path: string, download = false) => `/api/file?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`;
 
 export function uploadFiles(path: string, files: File[], onProgress: (loaded: number) => void) {

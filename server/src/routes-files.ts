@@ -191,7 +191,7 @@ async function mediaFile(req: Request, kind?: 'image') {
 // ---------------------------------------------------------------------------
 fileRoutes.get('/thumb', need('view'), async (req, res) => {
   const { abs } = await mediaFile(req, 'image');
-  const size: SizeKey = req.query.s === 'lg' ? 'lg' : req.query.s === 'xs' ? 'xs' : 'sm';
+  const size: SizeKey = (({ xs: 'xs', sm: 'sm', md: 'md', lg: 'lg' }) as Record<string, SizeKey>)[String(req.query.s)] ?? 'sm';
   let out: string;
   try { out = await getThumb(abs, size); } catch { throw new HttpError(415, 'No se pudo generar la miniatura'); }
   res.setHeader('Cache-Control', 'private, max-age=86400');

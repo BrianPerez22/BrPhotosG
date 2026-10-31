@@ -7,16 +7,24 @@ import { config } from './config';
 sharp.cache({ memory: 64, files: 0, items: 50 });
 sharp.concurrency(2);
 
-export const SIZES = { xs: 320, sm: 480, lg: 1800 } as const;
+export const SIZES = { xs: 320, sm: 480, md: 1280, lg: 1800 } as const;
 export type SizeKey = keyof typeof SIZES;
 
-// Máximo 2 miniaturas generándose a la vez (el servidor tiene poca RAM)
+// Máximo 2 miniaturas pequeñas a la vez (el servidor tiene poca RAM).
+// Las fotos grandes (md/lg) son las que el usuario abrió: pasan por delante de
+// la cola de miniaturas y pueden usar un hueco extra.
+const MAX = 2;
 let active = 0;
-const waiting: (() => void)[] = [];
-async function slot<T>(fn: () => Promise<T>): Promise<T> {
-  if (active >= 2) await new Promise<void>((r) => waiting.push(r));
+const urgentQ: (() => void)[] = [];
+const normalQ: (() => void)[] = [];
+function next() {
+  if (active < MAX + 1 && urgentQ.length) urgentQ.shift()!();
+  else if (active < MAX && normalQ.length) normalQ.shift()!();
+}
+async function slot<T>(fn: () => Promise<T>, urgent: boolean): Promise<T> {
+  if (active >= (urgent ? MAX + 1 : MAX)) await new Promise<void>((r) => (urgent ? urgentQ : normalQ).push(r));
   active++;
-  try { return await fn(); } finally { active--; waiting.shift()?.(); }
+  try { return await fn(); } finally { active--; next(); }
 }
 
 const inflight = new Map<string, Promise<string>>();
@@ -33,11 +41,11 @@ export async function getThumb(abs: string, size: SizeKey): Promise<string> {
       await sharp(abs, { failOn: 'none', limitInputPixels: 268402689 })
         .rotate()
         .resize({ width: SIZES[size], height: SIZES[size], fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: size === 'lg' ? 82 : 72 })
+        .webp({ quality: size === 'xs' || size === 'sm' ? 72 : 82 })
         .toFile(tmp);
       await fs.rename(tmp, out);
       return out;
-    }).finally(() => inflight.delete(out));
+    }, size === 'md' || size === 'lg').finally(() => inflight.delete(out));
     inflight.set(out, p);
   }
   return p;
