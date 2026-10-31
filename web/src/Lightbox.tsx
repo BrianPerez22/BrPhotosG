@@ -44,7 +44,7 @@ export default function Lightbox({ items, index, setIndex, onClose, canDownload,
         <button className="rounded-full p-2 hover:bg-white/10" onClick={onClose} aria-label="Cerrar"><Icon name="x" /></button>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{f.name}</p>
-          <p className="text-xs text-white/60">{new Date(f.mtime).toLocaleString('es')} · {index + 1} de {items.length}</p>
+          <p className="text-xs text-white/60">{new Date(f.cdate).toLocaleString('es')} · {index + 1} de {items.length}</p>
         </div>
         {canDownload && <a className="rounded-full p-2 hover:bg-white/10" href={fileUrl(f.path, true)} aria-label="Descargar"><Icon name="download" /></a>}
         {canDelete && <button className="rounded-full p-2 hover:bg-white/10" onClick={() => onDelete(f)} aria-label="Eliminar"><Icon name="trash" /></button>}

@@ -6,7 +6,7 @@ import type { FileEntry, FolderEntry, Listing, Me } from './types';
 
 interface Props { me: Me; path: string; go: (p: string) => void; onTreeChange: () => void; openMenu: () => void }
 
-const ls = (k: string, d: string) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
+const ls    = (k: string, d: string) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* ignorar */ } };
 const collator = new Intl.Collator('es', { numeric: true, sensitivity: 'base' });
 
@@ -32,19 +32,65 @@ function Thumb({ f, className = '' }: { f: FileEntry; className?: string }) {
   return <div className="flex h-full w-full items-center justify-center bg-ink-800 text-white/80"><Icon name={f.type === 'video' ? 'play' : 'photo'} className="h-8 w-8" /></div>;
 }
 
+// Iconos para las bibliotecas
+const LIB_ICONS: Record<string, string> = {
+  Fotos: 'photo',
+  Imágenes: 'photo',
+  Videos: 'play',
+};
+function libIcon(name: string): string {
+  return LIB_ICONS[name] ?? 'folder';
+}
+
+// Pantalla de selección de biblioteca (raíz global para admin)
+function LibraryHome({ folders, go }: { folders: FolderEntry[]; go: (p: string) => void }) {
+  return (
+    <div className="px-6 pt-8">
+      <h2 className="mb-6 text-2xl font-semibold tracking-tight">Bibliotecas</h2>
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {folders.map((f) => (
+          <button
+            key={f.path}
+            onClick={() => go(f.path)}
+            className="group flex flex-col overflow-hidden rounded-2xl border border-ink-200 bg-ink-50 text-left transition hover:border-accent hover:shadow-md dark:border-ink-800 dark:bg-ink-900 dark:hover:border-accent-dark"
+          >
+            <div className="aspect-video w-full overflow-hidden bg-ink-200 dark:bg-ink-800">
+              {f.cover
+                ? <img src={thumbUrl(f.cover)} alt="" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
+                : <div className="flex h-full w-full items-center justify-center">
+                    <Icon name={libIcon(f.name) as any} className="h-14 w-14 text-ink-400" />
+                  </div>
+              }
+            </div>
+            <div className="px-4 py-3">
+              <p className="text-base font-semibold">{f.name}</p>
+              <p className="mt-0.5 text-sm text-ink-500">
+                {[
+                  f.count ? `${f.count} archivo${f.count > 1 ? 's' : ''}` : '',
+                  f.subfolders ? `${f.subfolders} carpeta${f.subfolders > 1 ? 's' : ''}` : '',
+                ].filter(Boolean).join(' · ') || 'Vacía'}
+              </p>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Gallery({ me, path, go, onTreeChange, openMenu }: Props) {
-  const [data, setData] = useState<Listing | null>(null);
+  const [data, setData]   = useState<Listing | null>(null);
   const [error, setError] = useState('');
-  const [view, setView] = useState<'grid' | 'list'>(() => (ls('g_view', 'grid') === 'list' ? 'list' : 'grid'));
-  const [size, setSize] = useState(() => Number(ls('g_size', '190')) || 190);
-  const [sort, setSort] = useState<'date' | 'name'>('date');
-  const [sel, setSel] = useState<Set<string>>(new Set());
-  const [open, setOpen] = useState<number | null>(null);
-  const [up, setUp] = useState<{ done: number; total: number } | null>(null);
-  const [drag, setDrag] = useState(false);
+  const [view, setView]   = useState<'grid' | 'list'>(() => (ls('g_view', 'grid') === 'list' ? 'list' : 'grid'));
+  const [size, setSize]   = useState(() => Number(ls('g_size', '190')) || 190);
+  const [sort, setSort]   = useState<'date' | 'name'>('date');
+  const [sel, setSel]     = useState<Set<string>>(new Set());
+  const [open, setOpen]   = useState<number | null>(null);
+  const [up, setUp]       = useState<{ done: number; total: number } | null>(null);
+  const [drag, setDrag]   = useState(false);
   const [toast, setToast] = useState('');
-  const fileInput = useRef<HTMLInputElement>(null);
-  const toastTimer = useRef<number>();
+  const fileInput   = useRef<HTMLInputElement>(null);
+  const toastTimer  = useRef<number>();
 
   const flash = (m: string) => { setToast(m); window.clearTimeout(toastTimer.current); toastTimer.current = window.setTimeout(() => setToast(''), 4000); };
 
@@ -56,31 +102,36 @@ export default function Gallery({ me, path, go, onTreeChange, openMenu }: Props)
 
   const files = useMemo(() => {
     const f = [...(data?.files ?? [])];
-    return sort === 'name' ? f.sort((a, b) => collator.compare(a.name, b.name)) : f.sort((a, b) => b.mtime - a.mtime);
+    if (sort === 'name') return f.sort((a, b) => collator.compare(a.name, b.name));
+    // Ordenar por fecha de captura real (EXIF) descendente
+    return f.sort((a, b) => b.cdate - a.cdate);
   }, [data, sort]);
 
   const groups = useMemo(() => {
     if (sort !== 'date') return [{ label: '', items: files.map((f, i) => ({ f, i })) }];
     const out: { label: string; items: { f: FileEntry; i: number }[] }[] = [];
     files.forEach((f, i) => {
-      const label = dayLabel(f.mtime);
-      const last = out[out.length - 1];
+      // Agrupa por fecha de captura real
+      const label = dayLabel(f.cdate);
+      const last  = out[out.length - 1];
       if (last && last.label === label) last.items.push({ f, i }); else out.push({ label, items: [{ f, i }] });
     });
     return out;
   }, [files, sort]);
 
-  const canWrite = !!data?.canWrite;
+  const canWrite  = !!data?.canWrite;
   const canUpload = canWrite && me.perms.upload;
-  const isAdmin = me.role === 'admin';
+  const isAdmin   = me.role === 'admin';
+
+  // Pantalla raíz de admin (selección de biblioteca)
+  const isLibraryHome = data?.isLibraryRoot || (data?.path === '' && isAdmin);
 
   function toggle(p: string) { setSel((s) => { const n = new Set(s); n.has(p) ? n.delete(p) : n.add(p); return n; }); }
-  function pick(i: number) { sel.size ? toggle(files[i].path) : setOpen(i); }
+  function pick(i: number)   { sel.size ? toggle(files[i].path) : setOpen(i); }
 
   async function doUpload(list: File[]) {
     if (!list.length || !data) return;
     const total = list.reduce((a, f) => a + f.size, 0);
-    // Lotes de ~90 MB: Cloudflare limita cada petición a 100 MB en el plan gratuito
     const batches: File[][] = []; let cur: File[] = []; let curSize = 0;
     for (const f of list) {
       if (cur.length && curSize + f.size > 90 * 1024 * 1024) { batches.push(cur); cur = []; curSize = 0; }
@@ -124,7 +175,17 @@ export default function Gallery({ me, path, go, onTreeChange, openMenu }: Props)
   }
 
   const atHome = !data || data.path === '';
-  const title = atHome ? 'Fotos' : data!.crumbs[data!.crumbs.length - 1]?.name;
+
+  // Título: "Fotos", "Imágenes:2024/Viaje", etc.
+  function pageTitle() {
+    if (isLibraryHome) return 'Bibliotecas';
+    if (atHome) return me.role === 'admin' ? 'Inicio' : 'Mis carpetas';
+    return data!.crumbs[data!.crumbs.length - 1]?.name ?? '';
+  }
+  const title = pageTitle();
+
+  // Nombre de la biblioteca activa (extrae el prefijo "LibName:")
+  const activeLib = data?.path.includes(':') ? data.path.split(':')[0] : null;
 
   return (
     <div className="relative flex h-full min-w-0 flex-1 flex-col"
@@ -140,44 +201,71 @@ export default function Gallery({ me, path, go, onTreeChange, openMenu }: Props)
             <span className="text-sm font-medium">{sel.size} seleccionada{sel.size > 1 ? 's' : ''}</span>
             <div className="flex-1" />
             {me.perms.download && <button className="btn-ghost" onClick={downloadSelected}><Icon name="download" className="h-4 w-4" />Descargar</button>}
-            {me.perms.delete && <button className="btn-danger" onClick={() => del([...sel], `${sel.size} elemento(s)`)}><Icon name="trash" className="h-4 w-4" />Eliminar</button>}
+            {me.perms.delete  && <button className="btn-danger" onClick={() => del([...sel], `${sel.size} elemento(s)`)}><Icon name="trash" className="h-4 w-4" />Eliminar</button>}
           </>
         ) : (
           <>
             <button className="btn-ghost px-2 md:hidden" onClick={openMenu} aria-label="Menú"><Icon name="menu" /></button>
-            <button className="btn-ghost px-2 disabled:opacity-30" disabled={atHome || data?.parent == null} onClick={() => data?.parent != null && go(data.parent)} aria-label="Subir un nivel"><Icon name="left" /></button>
+            <button
+              className="btn-ghost px-2 disabled:opacity-30"
+              disabled={atHome || data?.parent == null}
+              onClick={() => data?.parent != null && go(data.parent)}
+              aria-label="Subir un nivel"
+            ><Icon name="left" /></button>
             <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap text-sm" aria-label="Ruta">
-              <button className={`rounded px-1.5 py-1 hover:bg-ink-100 dark:hover:bg-ink-800 ${atHome ? 'font-semibold' : 'text-ink-500'}`} onClick={() => go('')}>Fotos</button>
+              <button
+                className={`rounded px-1.5 py-1 hover:bg-ink-100 dark:hover:bg-ink-800 ${atHome ? 'font-semibold' : 'text-ink-500'}`}
+                onClick={() => go('')}
+              >{isAdmin ? 'Bibliotecas' : 'Mis carpetas'}</button>
+              {activeLib && (
+                <span className="flex items-center gap-1">
+                  <span className="text-ink-400">/</span>
+                  <button
+                    className={`rounded px-1.5 py-1 hover:bg-ink-100 dark:hover:bg-ink-800 ${!data?.crumbs.length ? 'font-semibold' : 'text-ink-500'}`}
+                    onClick={() => go(`${activeLib}:`)}
+                  >{activeLib}</button>
+                </span>
+              )}
               {data?.crumbs.map((c, i) => (
                 <span key={c.path} className="flex items-center gap-1">
                   <span className="text-ink-400">/</span>
-                  <button className={`rounded px-1.5 py-1 hover:bg-ink-100 dark:hover:bg-ink-800 ${i === data.crumbs.length - 1 ? 'font-semibold' : 'text-ink-500'}`} onClick={() => go(c.path)}>{c.name}</button>
+                  <button
+                    className={`rounded px-1.5 py-1 hover:bg-ink-100 dark:hover:bg-ink-800 ${i === data.crumbs.length - 1 ? 'font-semibold' : 'text-ink-500'}`}
+                    onClick={() => go(c.path)}
+                  >{c.name}</button>
                 </span>
               ))}
             </nav>
-            {view === 'grid' && <input type="range" min={110} max={320} value={size} onChange={(e) => { setSize(+e.target.value); lsSet('g_size', e.target.value); }} className="hidden w-24 accent-accent sm:block" aria-label="Tamaño de miniaturas" />}
-            <select value={sort} onChange={(e) => setSort(e.target.value as 'date' | 'name')} className="h-9 rounded-lg border border-ink-200 bg-transparent px-2 text-sm dark:border-ink-700" aria-label="Ordenar">
-              <option value="date">Por fecha</option><option value="name">Por nombre</option>
-            </select>
-            <div className="flex rounded-lg border border-ink-200 p-0.5 dark:border-ink-700">
-              {(['grid', 'list'] as const).map((v) => (
-                <button key={v} onClick={() => { setView(v); lsSet('g_view', v); }} aria-label={v === 'grid' ? 'Cuadrícula' : 'Lista'} aria-pressed={view === v}
-                  className={`rounded-md p-1.5 ${view === v ? 'bg-ink-200 dark:bg-ink-700' : 'text-ink-500'}`}><Icon name={v} className="h-4 w-4" /></button>
-              ))}
-            </div>
-            {canWrite && <button className="btn-ghost" onClick={newFolder}><Icon name="plus" className="h-4 w-4" />Carpeta</button>}
-            {canUpload && <button className="btn-solid" onClick={() => fileInput.current?.click()}><Icon name="upload" className="h-4 w-4" />Subir</button>}
-            <input ref={fileInput} type="file" multiple accept="image/*,video/*" hidden onChange={(e) => { doUpload([...(e.target.files ?? [])]); e.target.value = ''; }} />
+            {!isLibraryHome && <>
+              {view === 'grid' && <input type="range" min={110} max={320} value={size} onChange={(e) => { setSize(+e.target.value); lsSet('g_size', e.target.value); }} className="hidden w-24 accent-accent sm:block" aria-label="Tamaño de miniaturas" />}
+              <select value={sort} onChange={(e) => setSort(e.target.value as 'date' | 'name')} className="h-9 rounded-lg border border-ink-200 bg-transparent px-2 text-sm dark:border-ink-700" aria-label="Ordenar">
+                <option value="date">Por fecha</option><option value="name">Por nombre</option>
+              </select>
+              <div className="flex rounded-lg border border-ink-200 p-0.5 dark:border-ink-700">
+                {(['grid', 'list'] as const).map((v) => (
+                  <button key={v} onClick={() => { setView(v); lsSet('g_view', v); }} aria-label={v === 'grid' ? 'Cuadrícula' : 'Lista'} aria-pressed={view === v}
+                    className={`rounded-md p-1.5 ${view === v ? 'bg-ink-200 dark:bg-ink-700' : 'text-ink-500'}`}><Icon name={v} className="h-4 w-4" /></button>
+                ))}
+              </div>
+              {canWrite  && <button className="btn-ghost" onClick={newFolder}><Icon name="plus" className="h-4 w-4" />Carpeta</button>}
+              {canUpload && <button className="btn-solid" onClick={() => fileInput.current?.click()}><Icon name="upload" className="h-4 w-4" />Subir</button>}
+              <input ref={fileInput} type="file" multiple accept="image/*,video/*" hidden onChange={(e) => { doUpload([...(e.target.files ?? [])]); e.target.value = ''; }} />
+            </>}
           </>
         )}
       </header>
 
       {/* Contenido */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-24 pt-4">
-        {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">{error}</p>}
-        {!data && !error && <p className="text-sm text-ink-500">Cargando…</p>}
-        {data && (
-          <>
+      <div className="min-h-0 flex-1 overflow-y-auto pb-24 pt-4">
+        {error && <p role="alert" className="mx-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">{error}</p>}
+        {!data && !error && <p className="px-4 text-sm text-ink-500">Cargando…</p>}
+
+        {/* Pantalla de selección de biblioteca */}
+        {data && isLibraryHome && <LibraryHome folders={data.folders} go={go} />}
+
+        {/* Pantalla normal de carpeta / archivos */}
+        {data && !isLibraryHome && (
+          <div className="px-4">
             <h2 className="mb-4 text-2xl font-semibold tracking-tight">{title}</h2>
 
             {data.folders.length > 0 && (
@@ -236,13 +324,16 @@ export default function Gallery({ me, path, go, onTreeChange, openMenu }: Props)
 
             {files.length > 0 && view === 'list' && (
               <table className="w-full text-left text-sm">
-                <thead className="text-xs text-ink-500"><tr><th className="w-8 py-2" /><th className="py-2 font-medium">Nombre</th><th className="hidden py-2 font-medium sm:table-cell">Fecha</th><th className="hidden py-2 text-right font-medium sm:table-cell">Tamaño</th></tr></thead>
+                <thead className="text-xs text-ink-500"><tr><th className="w-8 py-2" /><th className="py-2 font-medium">Nombre</th><th className="hidden py-2 font-medium sm:table-cell">Fecha (captura)</th><th className="hidden py-2 text-right font-medium sm:table-cell">Tamaño</th></tr></thead>
                 <tbody>
                   {files.map((f, i) => (
                     <tr key={f.path} onClick={() => pick(i)} className={`cursor-pointer border-t border-ink-100 hover:bg-ink-50 dark:border-ink-800 dark:hover:bg-ink-900 ${sel.has(f.path) ? 'bg-accent-soft/60 dark:bg-accent/20' : ''}`}>
                       <td className="py-1.5 pr-2"><input type="checkbox" checked={sel.has(f.path)} onClick={(e) => e.stopPropagation()} onChange={() => toggle(f.path)} className="accent-accent" aria-label={`Seleccionar ${f.name}`} /></td>
                       <td className="py-1.5"><div className="flex items-center gap-3"><div className="h-10 w-10 shrink-0 overflow-hidden rounded"><Thumb f={f} /></div><span className="truncate">{f.name}</span></div></td>
-                      <td className="hidden py-1.5 text-ink-500 sm:table-cell">{new Date(f.mtime).toLocaleDateString('es')}</td>
+                      <td className="hidden py-1.5 text-ink-500 sm:table-cell">
+                        {new Date(f.cdate).toLocaleDateString('es')}
+                        {f.cdate !== f.mtime && <span className="ml-1 text-xs opacity-50" title="Fecha de captura EXIF">📷</span>}
+                      </td>
                       <td className="hidden py-1.5 text-right text-ink-500 sm:table-cell">{fmtSize(f.size)}</td>
                     </tr>
                   ))}
@@ -257,7 +348,7 @@ export default function Gallery({ me, path, go, onTreeChange, openMenu }: Props)
                 <p className="mt-1 text-sm">{canUpload ? 'Arrastra fotos aquí o usa «Subir».' : atHome && !isAdmin ? 'Pide al administrador que te dé acceso a una carpeta.' : ''}</p>
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
 

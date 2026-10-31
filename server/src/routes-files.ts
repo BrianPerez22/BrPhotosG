@@ -3,8 +3,12 @@ import multer from 'multer';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import sharp from 'sharp';
 import { effectivePerms, need, requireAuth } from './auth';
-import { accessRoot, canAccess, HttpError, mediaType, normalizeRel, REAL_ROOT, resolveSafe, TMP_NAME, TRASH_NAME, uniqueName, validName } from './fsutil';
+import {
+  canAccess, HttpError, LIBRARIES, mediaType, normalizeLibRel,
+  resolveSafe, splitLibRel, joinLibRel, libRoot, TMP_NAME, TRASH_NAME, uniqueName, validName,
+} from './fsutil';
 import { config } from './config';
 import { getThumb, type SizeKey } from './thumbs';
 
@@ -13,71 +17,210 @@ fileRoutes.use(requireAuth);
 
 const collator = new Intl.Collator('es', { numeric: true, sensitivity: 'base' });
 
-async function folderEntry(rel: string) {
+// ---------------------------------------------------------------------------
+// Fecha real de captura (EXIF DateTimeOriginal) con fallback a mtime
+// ---------------------------------------------------------------------------
+async function captureDate(abs: string, mtime: number): Promise<number> {
   try {
-    const abs = await resolveSafe(rel);
+    const meta = await sharp(abs, { failOn: 'none' }).metadata();
+    const raw = (meta as any).exif ? undefined : undefined; // sharp no expone EXIF parsed
+    // Usamos el campo 'iso' como proxy: si sharp puede leer metadatos, intentamos exif
+    // sharp provee `meta.exif` como Buffer; parseamos manualmente DateTimeOriginal
+    if (meta.exif) {
+      const exifBuf = meta.exif as Buffer;
+      const str = exifBuf.toString('binary');
+      // Busca "DateTimeOriginal\0" seguido de la fecha "YYYY:MM:DD HH:MM:SS"
+      const match = str.match(/DateTimeOriginal\0{0,4}([\x20-\x7e]{19})/);
+      if (match) {
+        const parsed = match[1].replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+        const d = new Date(parsed);
+        if (!isNaN(d.getTime())) return d.getTime();
+      }
+      // Fallback: busca DateTimeDigitized
+      const match2 = str.match(/DateTimeDigitized\0{0,4}([\x20-\x7e]{19})/);
+      if (match2) {
+        const parsed2 = match2[1].replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+        const d2 = new Date(parsed2);
+        if (!isNaN(d2.getTime())) return d2.getTime();
+      }
+    }
+  } catch { /* sin metadatos: usa mtime */ }
+  return mtime;
+}
+
+// ---------------------------------------------------------------------------
+// Entrada de carpeta
+// ---------------------------------------------------------------------------
+async function folderEntry(libRel: string) {
+  try {
+    const abs = await resolveSafe(libRel);
     const entries = await fs.readdir(abs, { withFileTypes: true });
     let count = 0, subfolders = 0;
     let cover: string | null = null;
     const names = entries.filter((e) => !e.name.startsWith('.')).sort((a, b) => collator.compare(a.name, b.name));
+    const { libName, rel } = splitLibRel(libRel);
     for (const e of names) {
       if (e.isDirectory()) subfolders++;
       else if (e.isFile()) {
         const t = mediaType(e.name);
-        if (t) { count++; if (!cover && t === 'image') cover = `${rel}/${e.name}`; }
+        if (t) {
+          count++;
+          if (!cover && t === 'image') {
+            cover = joinLibRel(libName, rel ? `${rel}/${e.name}` : e.name);
+          }
+        }
       }
     }
-    return { name: path.basename(rel), path: rel, cover, count, subfolders };
+    const name = rel ? path.basename(rel) : libName;
+    return { name, path: libRel, cover, count, subfolders };
   } catch { return null; }
 }
 
+// ---------------------------------------------------------------------------
+// GET /browse  →  ?path=LibName:rel/path  (o vacío para raíz de todas las libs)
+// ---------------------------------------------------------------------------
 fileRoutes.get('/browse', need('view'), async (req, res) => {
   const user = req.user!;
-  const rel = normalizeRel(req.query.path);
-  const perms = effectivePerms(user);
+  const rawPath = req.query.path as string | undefined;
 
-  if (user.role !== 'admin' && rel === '') {
+  // ── Raíz global (path vacío o sin prefijo vacío) ─────────────────────────
+  if (!rawPath || rawPath === '') {
+    if (user.role === 'admin') {
+      // Admin: muestra todas las bibliotecas como carpetas raíz
+      const libFolders = await Promise.all(
+        Object.keys(LIBRARIES).map(async (libName) => {
+          const libRel = joinLibRel(libName, '');
+          try {
+            const abs = libRoot(libName);
+            const entries = await fs.readdir(abs, { withFileTypes: true });
+            let count = 0, subfolders = 0;
+            let cover: string | null = null;
+            for (const e of entries.filter((x) => !x.name.startsWith('.'))) {
+              if (e.isDirectory()) subfolders++;
+              else if (e.isFile()) {
+                const t = mediaType(e.name);
+                if (t) { count++; if (!cover && t === 'image') cover = joinLibRel(libName, e.name); }
+              }
+            }
+            return { name: libName, path: libRel, cover, count, subfolders };
+          } catch { return null; }
+        })
+      );
+      return res.json({
+        path: '', parent: null, crumbs: [], isLibraryRoot: true,
+        libraries: Object.keys(LIBRARIES),
+        folders: libFolders.filter(Boolean),
+        files: [], canWrite: false,
+      });
+    }
+
+    // Usuario no-admin: muestra sus carpetas permitidas
     const list = (await Promise.all(user.folders.map(folderEntry))).filter(Boolean);
-    return res.json({ path: '', parent: null, crumbs: [], folders: list, files: [], canWrite: false });
+    return res.json({
+      path: '', parent: null, crumbs: [], isLibraryRoot: false,
+      libraries: [],
+      folders: list, files: [], canWrite: false,
+    });
   }
-  if (!canAccess(user, rel)) throw new HttpError(403, 'No tienes acceso a esta carpeta');
 
-  const abs = await resolveSafe(rel);
-  const st = await fs.stat(abs);
+  // ── Ruta dentro de una biblioteca ────────────────────────────────────────
+  const libRelPath = normalizeLibRel(rawPath);
+  const { libName, rel } = splitLibRel(libRelPath);
+
+  // Raíz de biblioteca (rel vacío)
+  if (rel === '' || rel === undefined) {
+    if (user.role !== 'admin') {
+      // Usuario: filtra solo carpetas a las que tiene acceso en esta biblioteca
+      const allowed = user.folders.filter((f) => f.startsWith(`${libName}${':'}`));
+      const list = (await Promise.all(allowed.map(folderEntry))).filter(Boolean);
+      return res.json({
+        path: libRelPath, parent: '', crumbs: [], isLibraryRoot: false,
+        libraries: [],
+        folders: list, files: [], canWrite: false,
+      });
+    }
+    // Admin: muestra contenido de la raíz de la biblioteca
+  }
+
+  if (!canAccess(user, libRelPath)) throw new HttpError(403, 'No tienes acceso a esta carpeta');
+
+  const abs = await resolveSafe(libRelPath);
+  const st  = await fs.stat(abs);
   if (!st.isDirectory()) throw new HttpError(400, 'No es una carpeta');
   const entries = await fs.readdir(abs, { withFileTypes: true });
 
   const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith('.'));
-  const folders = (await Promise.all(dirs.map((d) => folderEntry(rel ? `${rel}/${d.name}` : d.name))))
-    .filter((f): f is NonNullable<typeof f> => !!f)
+  const folders = (await Promise.all(
+    dirs.map((d) => folderEntry(joinLibRel(libName, rel ? `${rel}/${d.name}` : d.name)))
+  )).filter((f): f is NonNullable<typeof f> => !!f)
     .sort((a, b) => collator.compare(a.name, b.name));
 
   const media = entries.filter((e) => e.isFile() && !e.name.startsWith('.') && mediaType(e.name));
-  const files = (await Promise.all(media.map(async (e) => {
-    const s = await fs.stat(path.join(abs, e.name));
-    return { name: e.name, path: rel ? `${rel}/${e.name}` : e.name, type: mediaType(e.name)!, size: s.size, mtime: s.mtimeMs };
-  }))).sort((a, b) => b.mtime - a.mtime);
+  const files = await Promise.all(media.map(async (e) => {
+    const filePath = joinLibRel(libName, rel ? `${rel}/${e.name}` : e.name);
+    const s        = await fs.stat(path.join(abs, e.name));
+    const mtime    = s.mtimeMs;
+    // Fecha de captura real (EXIF) para imágenes
+    const fileType = mediaType(e.name)!;
+    let cdate = mtime;
+    if (fileType === 'image') {
+      const fileAbs = path.join(abs, e.name);
+      cdate = await captureDate(fileAbs, mtime);
+    }
+    return { name: e.name, path: filePath, type: fileType, size: s.size, mtime, cdate };
+  }));
+  // Ordenar por fecha de captura descendente por defecto en el servidor
+  files.sort((a, b) => b.cdate - a.cdate);
 
-  const base = accessRoot(user, rel) ?? '';
-  const baseParts = base ? base.split('/') : [];
-  const parts = rel ? rel.split('/') : [];
+  // Breadcrumbs: excluye el segmento de biblioteca; empieza desde la raíz de lib
+  const relParts = rel ? rel.split('/') : [];
   const crumbs: { name: string; path: string }[] = [];
-  for (let i = Math.max(baseParts.length - 1, 0); i < parts.length; i++) crumbs.push({ name: parts[i], path: parts.slice(0, i + 1).join('/') });
-  const parent = rel === '' ? null : (user.role !== 'admin' && rel === base) ? '' : parts.slice(0, -1).join('/');
+  // Si hay acceso con un folder-root de usuario, omite segmentos previos a él
+  const baseAccess = user.role === 'admin' ? '' : (user.folders.find((f) => libRelPath === f || libRelPath.startsWith(f + '/')) ?? '');
+  const baseParts  = baseAccess ? splitLibRel(baseAccess).rel.split('/').filter(Boolean) : [];
+  for (let i = Math.max(baseParts.length - 1, 0); i < relParts.length; i++) {
+    crumbs.push({ name: relParts[i], path: joinLibRel(libName, relParts.slice(0, i + 1).join('/')) });
+  }
 
-  res.json({ path: rel, parent, crumbs, folders, files, canWrite: user.role === 'admin' || (perms.upload && rel !== '') });
+  const parent = rel === ''
+    ? '' // volver a raíz global
+    : rel.includes('/')
+      ? joinLibRel(libName, relParts.slice(0, -1).join('/'))
+      : (user.role !== 'admin' && baseAccess === libRelPath) ? '' : joinLibRel(libName, '');
+
+  const perms = effectivePerms(user);
+  res.json({
+    path: libRelPath, parent, crumbs, isLibraryRoot: false,
+    libraries: Object.keys(LIBRARIES),
+    folders, files,
+    canWrite: user.role === 'admin' || (perms.upload && rel !== ''),
+  });
 });
 
+// Endpoint para listar las bibliotecas disponibles
+fileRoutes.get('/libraries', (_req, res) => {
+  res.json(Object.keys(LIBRARIES));
+});
+
+// ---------------------------------------------------------------------------
+// Helper: extrae y valida mediaFile con soporte de prefijo de biblioteca
+// ---------------------------------------------------------------------------
 async function mediaFile(req: Request, kind?: 'image') {
-  const rel = normalizeRel(req.query.path);
-  if (!rel || !canAccess(req.user!, rel)) throw new HttpError(403, 'Acceso denegado');
-  const t = mediaType(rel);
+  const rawPath = req.query.path as string | undefined;
+  if (!rawPath) throw new HttpError(400, 'Falta el parámetro path');
+  const libRelPath = normalizeLibRel(rawPath);
+  if (!libRelPath || !canAccess(req.user!, libRelPath)) throw new HttpError(403, 'Acceso denegado');
+  const { rel } = splitLibRel(libRelPath);
+  const t = mediaType(rel || libRelPath);
   if (!t || (kind && t !== kind)) throw new HttpError(415, 'Tipo de archivo no soportado');
-  const abs = await resolveSafe(rel);
+  const abs = await resolveSafe(libRelPath);
   if (!(await fs.stat(abs)).isFile()) throw new HttpError(404, 'No encontrado');
-  return { rel, abs };
+  return { libRelPath, abs };
 }
 
+// ---------------------------------------------------------------------------
+// GET /thumb
+// ---------------------------------------------------------------------------
 fileRoutes.get('/thumb', need('view'), async (req, res) => {
   const { abs } = await mediaFile(req, 'image');
   const size: SizeKey = req.query.s === 'lg' ? 'lg' : 'sm';
@@ -87,16 +230,22 @@ fileRoutes.get('/thumb', need('view'), async (req, res) => {
   res.sendFile(out, { cacheControl: false, dotfiles: 'allow' });
 });
 
+// ---------------------------------------------------------------------------
+// GET /file
+// ---------------------------------------------------------------------------
 fileRoutes.get('/file', need('view'), async (req, res) => {
-  const { rel, abs } = await mediaFile(req);
+  const { libRelPath, abs } = await mediaFile(req);
   const download = req.query.download === '1';
   if (download && !effectivePerms(req.user!).download) throw new HttpError(403, 'No tienes permiso para descargar');
   res.setHeader('Cache-Control', 'private, max-age=3600');
+  const { rel } = splitLibRel(libRelPath);
   if (download) res.attachment(path.basename(rel));
   res.sendFile(abs, { cacheControl: false, dotfiles: 'allow' }); // sendFile soporta Range (vídeo)
 });
 
-// ---- Subida ----
+// ---------------------------------------------------------------------------
+// POST /upload
+// ---------------------------------------------------------------------------
 const fixName = (n: string) => {
   if (/[^\u0000-\u00ff]/.test(n)) return n;
   const d = Buffer.from(n, 'latin1').toString('utf8');
@@ -105,23 +254,29 @@ const fixName = (n: string) => {
 
 async function prepUpload(req: Request, res: Response, next: NextFunction) {
   try {
-    const rel = normalizeRel(req.query.path);
+    const rawPath = req.query.path as string | undefined;
+    if (!rawPath) throw new HttpError(400, 'Falta el parámetro path');
+    const libRelPath = normalizeLibRel(rawPath);
+    const { libName, rel } = splitLibRel(libRelPath);
     if (!rel && req.user!.role !== 'admin') throw new HttpError(403, 'Elige una carpeta para subir');
-    if (!canAccess(req.user!, rel)) throw new HttpError(403, 'Acceso denegado');
-    const dir = await resolveSafe(rel);
+    if (!canAccess(req.user!, libRelPath)) throw new HttpError(403, 'Acceso denegado');
+    const dir = await resolveSafe(libRelPath);
     if (!(await fs.stat(dir)).isDirectory()) throw new HttpError(400, 'No es una carpeta');
-    res.locals.dir = dir;
+    // tmp dentro de la misma biblioteca
+    const tmpDir = path.join(libRoot(libName), TMP_NAME);
+    res.locals.dir    = dir;
+    res.locals.tmpDir = tmpDir;
     res.locals.skipped = [] as string[];
     next();
   } catch (e) { next(e); }
 }
 
-const uploader = multer({
+const uploaderFactory = (tmpDir: string) => multer({
   storage: multer.diskStorage({
-    destination: (_r, _f, cb) => cb(null, path.join(REAL_ROOT, TMP_NAME)),
-    filename: (_r, _f, cb) => cb(null, crypto.randomUUID()),
+    destination: (_r, _f, cb) => cb(null, tmpDir),
+    filename:    (_r, _f, cb) => cb(null, crypto.randomUUID()),
   }),
-  limits: { fileSize: config.maxUploadMb * 1024 * 1024, files: 200 },
+  limits:     { fileSize: config.maxUploadMb * 1024 * 1024, files: 200 },
   fileFilter: (req, file, cb) => {
     const name = fixName(file.originalname);
     if (mediaType(name)) return cb(null, true);
@@ -130,8 +285,15 @@ const uploader = multer({
   },
 });
 
-fileRoutes.post('/upload', need('upload'), prepUpload, uploader.array('files', 200), async (req, res) => {
-  const dir = res.locals.dir as string;
+// Middleware dinámico: crea el multer con el tmpDir adecuado
+async function dynamicUpload(req: Request, res: Response, next: NextFunction) {
+  const tmpDir = res.locals.tmpDir as string;
+  await fs.mkdir(tmpDir, { recursive: true });
+  uploaderFactory(tmpDir).array('files', 200)(req, res, next);
+}
+
+fileRoutes.post('/upload', need('upload'), prepUpload, dynamicUpload, async (req, res) => {
+  const dir  = res.locals.dir as string;
   const list = (req.files ?? []) as Express.Multer.File[];
   let uploaded = 0;
   for (const f of list) {
@@ -145,34 +307,48 @@ fileRoutes.post('/upload', need('upload'), prepUpload, uploader.array('files', 2
   res.json({ uploaded, skipped: (req as any).skipped ?? [] });
 });
 
-// ---- Crear carpeta ----
+// ---------------------------------------------------------------------------
+// POST /folders  — crear carpeta
+// ---------------------------------------------------------------------------
 fileRoutes.post('/folders', async (req, res) => {
-  const user = req.user!;
-  const rel = normalizeRel(req.body?.path);
+  const user       = req.user!;
+  const rawPath    = req.body?.path;
+  const libRelPath = normalizeLibRel(rawPath ?? '');
+  const { libName, rel } = splitLibRel(libRelPath);
   const name = validName(req.body?.name);
-  const allowed = user.role === 'admin' || (effectivePerms(user).upload && rel !== '' && canAccess(user, rel));
+  const perms   = effectivePerms(user);
+  const allowed = user.role === 'admin'
+    || (perms.upload && rel !== '' && canAccess(user, libRelPath));
   if (!allowed) throw new HttpError(403, 'No tienes permiso para crear carpetas aquí');
-  const parent = await resolveSafe(rel);
+  const parent = await resolveSafe(libRelPath);
   try { await fs.mkdir(path.join(parent, name)); }
-  catch (e: any) { throw new HttpError(e.code === 'EEXIST' ? 409 : 500, e.code === 'EEXIST' ? 'Ya existe una carpeta con ese nombre' : 'No se pudo crear la carpeta'); }
-  res.status(201).json({ path: rel ? `${rel}/${name}` : name });
+  catch (e: any) {
+    throw new HttpError(
+      e.code === 'EEXIST' ? 409 : 500,
+      e.code === 'EEXIST' ? 'Ya existe una carpeta con ese nombre' : 'No se pudo crear la carpeta'
+    );
+  }
+  res.status(201).json({ path: joinLibRel(libName, rel ? `${rel}/${name}` : name) });
 });
 
-// ---- Eliminar (mueve a .papelera; las carpetas solo el admin) ----
+// ---------------------------------------------------------------------------
+// POST /delete  — eliminar (mueve a papelera dentro de la misma biblioteca)
+// ---------------------------------------------------------------------------
 fileRoutes.post('/delete', need('delete'), async (req, res) => {
-  const user = req.user!;
+  const user  = req.user!;
   const paths: unknown = req.body?.paths;
   if (!Array.isArray(paths) || !paths.length || paths.length > 500) throw new HttpError(400, 'Nada que eliminar');
   let deleted = 0;
   for (const p of paths) {
-    const rel = normalizeRel(p);
-    if (!rel || !canAccess(user, rel)) continue;
-    const abs = await resolveSafe(rel).catch(() => null);
+    const rawLibRel = normalizeLibRel(p);
+    if (!rawLibRel || !canAccess(user, rawLibRel)) continue;
+    const { libName, rel } = splitLibRel(rawLibRel);
+    const abs = await resolveSafe(rawLibRel).catch(() => null);
     if (!abs) continue;
     const st = await fs.stat(abs);
     if (st.isDirectory() && user.role !== 'admin') continue;
     if (st.isFile() && !mediaType(rel)) continue;
-    const trash = path.join(REAL_ROOT, TRASH_NAME);
+    const trash = path.join(libRoot(libName), TRASH_NAME);
     await fs.mkdir(trash, { recursive: true });
     await fs.rename(abs, path.join(trash, `${Date.now()}_${rel.replace(/\//g, '__')}`));
     deleted++;
